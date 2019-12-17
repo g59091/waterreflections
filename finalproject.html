@@ -1,0 +1,448 @@
+<!--
+Made by: Gabriel Aguiar
+Requires: WebGL, Three.JS
+Skybox source: http://www.custommapmakers.org/skyboxes.php, HW Morning, Sky box created by Hazel Whorley.
+Based on: 
+Jonas Wagner's http://29a.ch/slides/2012/webglwater/, Water shader explanations in WebGL
+Slayvin's FlatMirror.js flat mirror demonstration, &
+Jbouny's https://github.com/jbouny/ocean Ocean Water simulator.
+"New Super Mario Bros. - World 3 (Beach) Theme" is copyrighted by Nintendo. 
+-->
+
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+    <title>COP4270 Project: Gabriel Ag.</title>
+    <style>
+      body {
+        background-color: #000;
+        margin: 0px;
+        padding: 0px;
+        color: #fff;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- libraries -->
+    <script src="./three.min.js"></script>
+		<script src="./OrbitControls.js"></script>
+    <script src="./RequestAnimationFrame.js"></script>
+    <script>
+      var beachaudio = new Audio('beachtheme.mp3');
+      beachaudio.addEventListener('ended', function() {
+        this.currentTime = 0;
+        this.volume = 0.75;
+        this.play();
+      }, false);
+      beachaudio.play();
+      beachaudio.volume = 0.75;
+      THREE.ShaderLib['water'] = 
+      {
+        uniforms: THREE.UniformsUtils.merge([
+          THREE.UniformsLib["fog"], { 
+            // unforms nessecary for the shader program
+            "normalSampler": {type: "t", value: null},
+            "mirrorSampler":{type: "t", value: null},
+            "alpha": {type: "f", value: 1.0},
+            "time": {type: "f", value: 0.0},
+            "distortionScale": {type: "f", value: 20.0},
+            "noiseScale": {type: "f", value: 1.0},
+            "textureMatrix" : {type: "m4", value: new THREE.Matrix4()},
+            "sunColor": {type: "c", value: new THREE.Color(0x7F7F7F)},
+            "sunDirection": {type: "v3", value: new THREE.Vector3(0.70707, 0.70707, 0)},
+            "eye": {type: "v3", value: new THREE.Vector3(0, 0, 0)},
+            "waterColor": {type: "c", value: new THREE.Color(0x555555)}
+          }
+        ]),
+        vertexShader: [
+          'uniform mat4 textureMatrix;',
+          'uniform float time;',
+          'varying vec4 mirrorCoord;',
+          'varying vec3 worldPosition, modelPosition, surfaceX, surfaceY, surfaceZ;',
+          'void main()',
+          '{',
+          '  mirrorCoord = modelMatrix * vec4(position, 1.0);',
+          '  worldPosition = mirrorCoord.xyz;',
+          '  modelPosition = position;',
+          '  surfaceX = vec3( modelMatrix[0][0], modelMatrix[0][1], modelMatrix[0][2]);',
+          '  surfaceY = vec3( modelMatrix[1][0], modelMatrix[1][1], modelMatrix[1][2]);',
+          '  surfaceZ = vec3( modelMatrix[2][0], modelMatrix[2][1], modelMatrix[2][2]);',
+          '  mirrorCoord = textureMatrix * mirrorCoord;',
+          '  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);',
+          '}'
+        ].join('\n'),
+        fragmentShader: [    
+          'uniform sampler2D mirrorSampler;',
+          'uniform float alpha;',
+          'uniform float time;',
+          'uniform float distortionScale;',
+          'uniform float noiseScale;',
+          'uniform sampler2D normalSampler;',
+          'uniform vec3 sunColor;',
+          'uniform vec3 sunDirection;',
+          'uniform vec3 eye;',
+          'uniform vec3 waterColor;',
+          'varying vec4 mirrorCoord;',
+          'varying vec3 worldPosition;',
+          'varying vec3 modelPosition;',
+          'varying vec3 surfaceX;',
+          'varying vec3 surfaceY;',
+          'varying vec3 surfaceZ;',
+          // included functions from Jonan's water shader tutorial
+          'void sunLight(const vec3 surfaceNormal, const vec3 eyeDirection, in float shiny, in float spec, in float diffuse, inout vec3 diffuseColor, inout vec3 specularColor)',
+          '{',
+          '  vec3 reflection = normalize(reflect(-sunDirection, surfaceNormal));',
+          '  float direction = max(0.0, dot(eyeDirection, reflection));',
+          '  specularColor += pow(direction, shiny) * sunColor * spec;',
+          '  diffuseColor += max(dot(sunDirection, surfaceNormal), 0.0) * sunColor * diffuse;',
+          '}',
+          'vec3 getNoise(in vec2 uv)',
+          '{',
+          '  vec2 uv0 = uv / (103.0 * noiseScale) + vec2(time / 17.0, time / 29.0);',
+          '  vec2 uv1 = uv / (107.0 * noiseScale) - vec2(time / -19.0, time / 31.0);',
+          '  vec2 uv2 = uv / (vec2(8907.0, 9803.0) * noiseScale) + vec2(time / 101.0, time /   97.0);',
+          '  vec2 uv3 = uv / (vec2(1091.0, 1027.0) * noiseScale) - vec2(time / 109.0, time / -113.0);',
+          '  vec4 noise = texture2D(normalSampler, uv0) +',
+          '    texture2D(normalSampler, uv1) +',
+          '    texture2D(normalSampler, uv2) +',
+          '    texture2D(normalSampler, uv3);',
+          '  return noise.xyz * 0.5 - 1.0;',
+          '}',
+        THREE.ShaderChunk[ "common" ],
+        THREE.ShaderChunk[ "fog_pars_fragment" ],
+        'void main()',
+        '{',
+        '  vec3 worldToEye = eye - worldPosition;',
+        '  vec3 eyeDirection = normalize(worldToEye);',
+        '  vec3 noise = getNoise(modelPosition.xy * 1.0);',
+        '  vec3 distoredC = noise.x * surfaceX + noise.y * surfaceY;',
+        '  vec3 distoredN = distoredC + surfaceZ;',
+        '  if (dot(eyeDirection, surfaceZ) <= 0.0)',
+        '    distoredN = distoredN * -1.0;',
+        '  vec3 diffuseLight = vec3(0.0);',
+        '  vec3 specularLight = vec3(0.0);',
+        '  sunLight(distoredN, eyeDirection, 100.0, 2.0, 0.5, diffuseLight, specularLight);',
+        '  float distance = length(worldToEye);',
+        '  vec2 distortion = distoredC.xy * distortionScale * sqrt(distance) * 0.07;',
+        '  vec3 distoredM = mirrorCoord.xyz + vec3(distortion.x, distortion.y, 1.0);',
+        '  vec3 reflectionSample = texture2DProj(mirrorSampler, distoredM).xyz;',
+        '  float theta = max(dot(eyeDirection, distoredN), 0.0);',
+        '  float reflectance = 0.3 + (1.0 - 0.3) * pow((1.0 - theta), 3.0);',
+        '  vec3 scatter = max(0.0, dot(distoredN, eyeDirection)) * waterColor;',
+        '  vec3 pixelcolor = mix(sunColor * diffuseLight * 0.3 + scatter, (vec3(0.1) + reflectionSample * 0.9 + reflectionSample * specularLight), reflectance);',
+        ' vec3 outgoingLight = pixelcolor;', 
+      THREE.ShaderChunk[ "fog_fragment" ],
+        ' gl_FragColor = vec4(outgoingLight, alpha);',
+        '}'
+        ].join('\n')
+      };
+
+      THREE.Water = function (renderer, camera, scene, tweaks)
+      {
+        THREE.Object3D.call(this);
+        this.matrixNeedsUpdate = true;
+        var width = 256;
+        var height = 256;
+        this.clipBias = -0.0001;
+        this.alpha = 1.0;
+        this.time = 0.0;
+        this.normalSampler = tweaks.waterNormals;
+        this.sunDirection = tweaks.sunDirection;
+        this.sunColor = new THREE.Color(0xffffff);
+        this.waterColor = new THREE.Color(0x001e0f);
+        this.eye = new THREE.Vector3(0, 0, 0);
+        this.distortionScale = 20.0;
+        this.noiseScale = 1.0;
+        this.side = THREE.DoubleSide;
+        this.fog = false;
+        this.renderer = renderer;
+        this.scene = scene;
+        this.normal = new THREE.Vector3(0, 0, 1);
+        this.cameraWorldPosition = new THREE.Vector3();
+        this.rotationMatrix = new THREE.Matrix4();
+        this.lookAtPosition = new THREE.Vector3(0, 0, -1);
+        this.clipPlane = new THREE.Vector4();
+        if (camera instanceof THREE.PerspectiveCamera)
+          this.camera = camera;
+        else
+          this.camera = new THREE.PerspectiveCamera();
+        this.textureMatrix = new THREE.Matrix4();
+        this.texture = new THREE.WebGLRenderTarget(width, height);
+        this.tempTexture = new THREE.WebGLRenderTarget(width, height);
+        // making the mirror of the scene
+        // in order to render it on the water
+        this.mirrorPlane = new THREE.Plane();
+        this.mCam = this.camera.clone();
+        var mirrorShader = THREE.ShaderLib["water"];
+        var mirrorUniforms = THREE.UniformsUtils.clone(mirrorShader.uniforms);
+        this.material = new THREE.ShaderMaterial({ 
+          fragmentShader: mirrorShader.fragmentShader, 
+          vertexShader: mirrorShader.vertexShader, 
+          uniforms: mirrorUniforms,
+          transparent: true,
+          side: this.side,
+          fog: this.fog
+        });
+        this.mesh = new THREE.Object3D();
+        // populating the mirror uniforms
+        this.material.uniforms.mirrorSampler.value = this.texture;
+        this.material.uniforms.textureMatrix.value = this.textureMatrix;
+        this.material.uniforms.alpha.value = this.alpha;
+        this.material.uniforms.time.value = this.time;
+        this.material.uniforms.normalSampler.value = this.normalSampler;
+        this.material.uniforms.sunColor.value = this.sunColor;
+        this.material.uniforms.waterColor.value = this.waterColor;
+        this.material.uniforms.sunDirection.value = this.sunDirection;
+        this.material.uniforms.distortionScale.value = this.distortionScale;
+        this.material.uniforms.noiseScale.value = this.noiseScale;
+        this.material.uniforms.eye.value = this.eye;
+        if (!THREE.Math.isPowerOfTwo(width) || !THREE.Math.isPowerOfTwo(height)) 
+        {
+          this.texture.generateMipmaps = false;
+          this.tempTexture.generateMipmaps = false;
+        }
+      };
+      THREE.Water.prototype = Object.create(THREE.Object3D.prototype);
+      
+      // making sure the mirror render is updated:
+      // flip the camera and taking a render of the inverse of the scene
+      // apply it to the inverse scene
+      THREE.Water.prototype.mrender = function (otherMirror) 
+      {
+        this.updateTextureMatrix();
+        this.matrixNeedsUpdate = false;
+        var tempCamera = otherMirror.camera;
+        otherMirror.camera = this.mCam;
+        otherMirror.render(true);
+        this.render();
+        this.matrixNeedsUpdate = true;
+        otherMirror.camera = tempCamera;
+        otherMirror.updateTextureMatrix();
+      };
+      THREE.Water.prototype.updateTextureMatrix = function () 
+      {
+        if (this.parent !== undefined) 
+          this.mesh = this.parent;
+        function sign(x) 
+        { 
+          return x ? x < 0 ? -1 : 1 : 0; 
+        }
+        this.updateMatrixWorld();
+        this.camera.updateMatrixWorld();
+        this.cameraWorldPosition.setFromMatrixPosition(this.camera.matrixWorld);
+        this.rotationMatrix.extractRotation(this.matrixWorld);
+        this.normal = (new THREE.Vector3(0, 0, 1)).applyEuler(this.mesh.rotation);
+        var cameraPosition = this.camera.position.clone().sub(this.mesh.position);
+        if (this.normal.dot(cameraPosition) < 0) 
+        {
+          var meshNormal = (new THREE.Vector3(0, 0, 1)).applyEuler(this.mesh.rotation);
+          this.normal.reflect(meshNormal);
+        }
+        var view = this.mesh.position.clone().sub(this.cameraWorldPosition);
+        view.reflect(this.normal).negate();
+        view.add(this.mesh.position);
+        this.rotationMatrix.extractRotation(this.camera.matrixWorld);
+        this.lookAtPosition.set(0, 0, -1);
+        this.lookAtPosition.applyMatrix4(this.rotationMatrix);
+        this.lookAtPosition.add(this.cameraWorldPosition);
+        var target = this.mesh.position.clone().sub(this.lookAtPosition);
+        target.reflect(this.normal).negate();
+        target.add(this.mesh.position);
+        this.up.set(0, -1, 0);
+        this.up.applyMatrix4(this.rotationMatrix);
+        this.up.reflect(this.normal).negate();
+        this.mCam.position.copy(view);
+        this.mCam.up = this.up;
+        this.mCam.lookAt(target);
+        this.mCam.aspect = this.camera.aspect;
+        
+        // updating the matricies
+        this.mCam.updateProjectionMatrix();
+        this.mCam.updateMatrixWorld();
+        this.mCam.matrixWorldInverse.getInverse(this.mCam.matrixWorld);
+        this.textureMatrix.set
+        (
+          0.5, 0.0, 0.0, 0.5,
+          0.0, 0.5, 0.0, 0.5,
+          0.0, 0.0, 0.5, 0.5,
+          0.0, 0.0, 0.0, 1.0
+        );
+        this.textureMatrix.multiply(this.mCam.projectionMatrix);
+        this.textureMatrix.multiply(this.mCam.matrixWorldInverse);
+        
+        // Update projection matrix with new clip plane
+        // code used from: http://www.terathon.com/code/oblique.html
+        this.mirrorPlane.setFromNormalAndCoplanarPoint(this.normal, this.mesh.position);
+        this.mirrorPlane.applyMatrix4(this.mCam.matrixWorldInverse);
+        this.clipPlane.set(this.mirrorPlane.normal.x, this.mirrorPlane.normal.y, this.mirrorPlane.normal.z, this.mirrorPlane.constant);
+        
+        // vector math
+        var q = new THREE.Vector4();
+        var projectionMatrix = this.mCam.projectionMatrix;
+        q.x = (sign(this.clipPlane.x) + projectionMatrix.elements[8]) / projectionMatrix.elements[0];
+        q.y = (sign(this.clipPlane.y) + projectionMatrix.elements[9]) / projectionMatrix.elements[5];
+        q.z = -1.0;
+        q.w = (1.0 + projectionMatrix.elements[10]) / projectionMatrix.elements[14];
+        // Calculate the scaled plane vector
+        var c = new THREE.Vector4();
+        c = this.clipPlane.multiplyScalar(2.0 / this.clipPlane.dot(q));
+        // Replacing the third row of the projection matrix
+        projectionMatrix.elements[2] = c.x;
+        projectionMatrix.elements[6] = c.y;
+        projectionMatrix.elements[10] = c.z + 1.0 - this.clipBias;
+        projectionMatrix.elements[14] = c.w;
+        var worldCoordinates = new THREE.Vector3();
+        worldCoordinates.setFromMatrixPosition(this.camera.matrixWorld);
+        this.eye = worldCoordinates;
+        this.material.uniforms.eye.value = this.eye;
+      };
+      THREE.Water.prototype.render = function (isTempTexture) 
+      {
+        if (this.matrixNeedsUpdate) 
+          this.updateTextureMatrix();
+        this.matrixNeedsUpdate = true;
+        // Render the mirrored view of the current scene into the target texture
+        if (this.scene !== undefined && this.scene instanceof THREE.Scene) 
+        {
+          this.material.visible = false;
+          var renderTexture = (isTempTexture && isTempTexture !== undefined) ? this.tempTexture : this.texture;
+          this.renderer.render(this.scene, this.mCam, renderTexture, true);
+          this.material.visible = true;
+          this.material.uniforms.mirrorSampler.value = renderTexture;
+        }
+      };
+     
+      let WIDTH = window.innerWidth;
+      let HEIGHT = window.innerHeight;
+      var w_Renderer = null;
+      var w_Camera = null;
+      var w_Scene = null;
+      var w_Controls = null;
+      var w_Water = null;
+      function initscene()
+      {
+        w_Renderer = new THREE.WebGLRenderer();
+        w_Renderer.setSize(WIDTH, HEIGHT);
+        document.body.appendChild(w_Renderer.domElement);
+        w_Scene = new THREE.Scene();
+        w_Camera = new THREE.PerspectiveCamera(55.0, WIDTH / HEIGHT, 0.5, 3000000);
+        w_Camera.position.set(-1054, 502, -531);
+        w_Camera.lookAt(new THREE.Vector3(0, 0, 0));
+        w_Controls = new THREE.OrbitControls(w_Camera, w_Renderer.domElement);
+        var directionalLight = new THREE.DirectionalLight(0xffff55, 1);
+        directionalLight.position.set(-600, 300, 600);
+        w_Scene.add(directionalLight);
+        var waterNormals = new THREE.ImageUtils.loadTexture('./waternormals.jpg');
+        waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
+        w_Water = new THREE.Water(w_Renderer, w_Camera, w_Scene, {
+          waterNormals: waterNormals,
+          sunDirection: directionalLight.position.normalize()
+        });
+        var wplane = new THREE.Mesh
+        (
+          new THREE.PlaneBufferGeometry(2000, 2000, 10, 10),
+          w_Water.material
+        );
+        wplane.add(w_Water);
+        wplane.rotation.x = - Math.PI / 2;
+        wplane.position.set(0, -220, 0);
+        w_Scene.add(wplane);
+        skyBox();
+        islands();
+      }
+      function skyBox()
+      {
+        var box = THREE.ImageUtils.loadTextureCube([
+          'morning_ft.png',
+          'morning_bk.png',
+          'morning_up.png',
+          'morning_dn.png',
+          'morning_rt.png',
+          'morning_lf.png'
+        ]);
+        box.format = THREE.RGBFormat;
+        var sbshader = THREE.ShaderLib['cube'];
+        sbshader.uniforms['tCube'].value = box;
+        var sbmaterials = new THREE.ShaderMaterial({
+          fragmentShader: sbshader.fragmentShader,
+          vertexShader: sbshader.vertexShader,
+          uniforms: sbshader.uniforms,
+          depthWrite: false,
+          side: THREE.BackSide
+        });
+        var sb = new THREE.Mesh(new THREE.BoxGeometry(2000, 2000, 2000), sbmaterials);
+        w_Scene.add(sb);
+      }
+      function islands()
+      {
+        var bigislegeom = new THREE.CylinderGeometry(200, 200, 5, 64);
+        var bigislegeom_sand = new THREE.CylinderGeometry(210, 210, 20, 64);
+        var smallislegeom = new THREE.CylinderGeometry(100, 100, 5, 64);
+        var smallislegeom_sand = new THREE.CylinderGeometry(110, 110, 20, 64);
+        var islemtl = new THREE.MeshBasicMaterial({color: 0x084A00});
+        var islemtl2 = new THREE.MeshBasicMaterial({color: 0xF9D199});
+        var bigisle = new THREE.Mesh(bigislegeom, islemtl);
+        var smallisle1 = new THREE.Mesh(smallislegeom, islemtl);
+        var smallisle2 = new THREE.Mesh(smallislegeom, islemtl);
+        var bigisle_s = new THREE.Mesh(bigislegeom_sand, islemtl2);
+        var smallisle1_s = new THREE.Mesh(smallislegeom_sand, islemtl2);
+        var smallisle2_s = new THREE.Mesh(smallislegeom_sand, islemtl2);
+        bigisle.position.set(200, -210, -20);
+        bigisle_s.position.set(200, -225, -20);
+        smallisle1.position.set(800, -210, 0);
+        smallisle1_s.position.set(800, -225, 0);
+        smallisle2.position.set(700, -210, -650);
+        smallisle2_s.position.set(700, -225, -650);
+        w_Scene.add(bigisle);
+        w_Scene.add(bigisle_s);
+        w_Scene.add(smallisle1);
+        w_Scene.add(smallisle1_s);
+        w_Scene.add(smallisle2);
+        w_Scene.add(smallisle2_s);
+      }
+      function display()
+      {
+        w_Water.render();
+        w_Renderer.render(w_Scene, w_Camera);
+      }
+      function updateAll()
+      {
+        w_Water.material.uniforms.time.value += 1.0 / 60.0;
+        w_Controls.update();
+        display();
+      }
+      function handleresize()
+      {
+        window.addEventListener
+        (
+          "resize",
+          function() 
+          {
+            WIDTH = window.innerWidth;
+            HEIGHT = window.innerHeight;
+            w_Camera.aspect = WIDTH / HEIGHT;
+            w_Camera.updateProjectionMatrix();
+            w_Renderer.setSize(WIDTH, HEIGHT);
+            display();
+          }
+        );
+      }
+      function animate()
+      {
+        requestAnimationFrame(animate);
+        updateAll();
+      }
+      function start()
+      {
+        initscene();
+        handleresize();
+        display();
+        animate();
+      }
+
+      start();
+    </script>
+  </body>
+</html>
